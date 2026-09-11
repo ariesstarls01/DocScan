@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DocScan</title>
+<style>
+*{box-sizing:border-box}
+body{
+ margin:0;background:#111;color:white;
+ font-family:-apple-system,BlinkMacSystemFont,sans-serif
+}
+main{max-width:600px;margin:auto;padding:30px 18px}
+h1{text-align:center;font-size:32px}
+.sub{text-align:center;color:#aaa;margin-bottom:25px}
+button,label{
+ display:block;width:100%;padding:16px;margin:10px 0;
+ border:0;border-radius:14px;font-size:17px;font-weight:700;
+ text-align:center
+}
+.primary{background:white;color:#111}
+.secondary{background:#292929;color:white}
+input{display:none}
+#status{text-align:center;color:#aaa;margin:15px 0;min-height:24px}
+#preview,#result{
+ width:100%;border-radius:14px;margin-top:15px;display:none
+}
+.pages{display:flex;gap:8px;overflow:auto;margin-top:15px}
+.thumb{width:70px;height:90px;object-fit:cover;border-radius:8px}
+</style>
+</head>
+
+<body>
+<main>
+
+<div style="text-align:center;font-size:50px">📷</div>
+<h1>DocScan</h1>
+<div class="sub">
+Chụp tài liệu → căn thẳng → xuất PDF
+</div>
+
+<label class="primary" for="camera">
+📷 Scan bằng camera
+</label>
+
+<input id="camera"
+       type="file"
+       accept="image/*"
+       capture="environment">
+
+<label class="secondary" for="gallery">
+🖼 Chọn ảnh có sẵn
+</label>
+
+<input id="gallery"
+       type="file"
+       accept="image/*"
+       multiple>
+
+<div id="status"></div>
+
+<img id="preview">
+
+<div id="pages" class="pages"></div>
+
+<button id="more"
+        class="secondary"
+        style="display:none">
+＋ Scan thêm trang
+</button>
+
+<button id="pdf"
+        class="primary"
+        style="display:none">
+📄 Xuất PDF
+</button>
+
+</main>
+
+<script src="https://docs.opencv.org/4.x/opencv.js"></script>
+
+<script>
+
+const camera=document.getElementById("camera");
+const gallery=document.getElementById("gallery");
+const preview=document.getElementById("preview");
+const pages=document.getElementById("pages");
+const status=document.getElementById("status");
+const more=document.getElementById("more");
+const pdf=document.getElementById("pdf");
+
+let scans=[];
+
+
+/* =========================
+   ĐỌC ẢNH
+========================= */
+
+function loadImage(file){
+
+ return new Promise((resolve,reject)=>{
+
+  const url=URL.createObjectURL(file);
+  const img=new Image();
+
+  img.onload=()=>{
+   URL.revokeObjectURL(url);
+   resolve(img);
+  };
+
+  img.onerror=reject;
+  img.src=url;
+
+ });
+
+}
+
+
+/* =========================
+   TÌM 4 GÓC TỜ GIẤY
+========================= */
+
+function findCorners(img){
+
+ try{
+
+  let src=cv.imread(img);
+  let gray=new cv.Mat();
+  let blur=new cv.Mat();
+  let edge=new cv.Mat();
+
+  cv.cvtColor(
+   src,
+   gray,
+   cv.COLOR_RGBA2GRAY
+  );
+
+  cv.GaussianBlur(
+   gray,
+   blur,
+   new cv.Size(5,5),
+   0
+  );
+
+  cv.Canny(
+   blur,
+   edge,
+   50,
+   150
+  );
+
+  let contours=new cv.MatVector();
+  let hierarchy=new cv.Mat();
+
+  cv.findContours(
+   edge,
+   contours,
+   hierarchy,
+   cv.RETR_LIST,
+   cv.CHAIN_APPROX_SIMPLE
+  );
+
+  let best=null;
+  let bestArea=0;
+
+  for(let i=0;i<contours.size();i++){
+
+   let c=contours.get(i);
+   let peri=cv.arcLength(c,true);
+   let approx=new cv.Mat();
+
+   cv.approxPolyDP(
+    c,
+    approx,
+    0.02*peri,
+    true
+   );
+
+   let area=Math.abs(
+    cv.contourArea(approx)
+   );
+
+   if(
+    approx.rows===4 &&
+    area>bestArea
+   ){
+
+    if(best) best.delete();
+
+    best=approx;
+    bestArea=area;
+
+   }else{
+
+    approx.delete();
+
+   }
+
+   c.delete();
+
+  }
+
+  let points=null;
+
+  if(best){
+
+   points=[];
+
+   for(let i=0;i<4;i++){
+
+    let p=best.intPtr(i,0);
+
+    points.push({
+     x:p[0],
+     y:p[1]
+    });
+
+   }
+
+   best.delete();
+
+  }
+
+  src.delete();
+  gray.delete();
+  blur.delete();
+  edge.delete();
+  contours.delete();
+  hierarchy.delete();
+
+  if(!points) return null;
+
+  return orderPoints(points);
+
+ }catch(e){
+
+  console.log(e);
+  return null;
+
+ }
+
+}
+
+
+/* =========================
+   SẮP XẾP 4 GÓC
+========================= */
+
+function orderPoints(p){
+
+ let cx=p.reduce(
+  (s,x)=>s+x.x,0
+ )/4;
+
+ let cy=p.reduce(
+  (s,x)=>s+x.y,0
+ )/4;
+
+ p.sort(
+  (a,b)=>
+   Math.atan2(a.y-cy,a.x-cx)-
+   Math.atan2(b.y-cy,b.x-cx)
+ );
+
+ let tl=p.reduce(
+  (a,b)=>
+   a.x+a.y<b.x+b.y?a:b
+ );
+
+ let br=p.reduce(
+  (a,b)=>
+   a.x+a.y>b.x+b.y?a:b
+ );
+
+ let tr=p.reduce(
+  (a,b)=>
+   a.x-a.y>b.x-b.y?a:b
+ );
+
+ let bl=p.reduce(
+  (a,b)=>
+   a.x-a.y<b.x-b.y?a:b
+ );
+
+ return [tl,tr,br,bl];
+
+}
+
+
+/* =========================
+   CĂN THẲNG TỜ GIẤY
+========================= */
+
+function scanImage(img,points){
+
+ if(!points){
+
+  let canvas=document.createElement("canvas");
+
+  canvas.width=img.naturalWidth;
+  canvas.height=img.naturalHeight;
+
+  canvas.getContext("2d")
+        .drawImage(img,0,0);
+
+  return canvas.toDataURL(
+   "image/jpeg",
+   .9
+  );
+
+ }
+
+ let tl=points[0];
+ let tr=points[1];
+ let br=points[2];
+ let bl=points[3];
+
+ let width=Math.round(
+  Math.max(
+   Math.hypot(
+    tr.x-tl.x,
+    tr.y-tl.y
+   ),
+   Math.hypot(
+    br.x-bl.x,
+    br.y-bl.y
+   )
+  )
+ );
+
+ let height=Math.round(
+  Math.max(
+   Math.hypot(
+    bl.x-tl.x,
+    bl.y-tl.y
+   ),
+   Math.hypot(
+    br.x-tr.x,
+    br.y-tr.y
+   )
+  )
+ );
+
+ let src=cv.imread(img);
+ let dst=new cv.Mat();
+
+ let srcPts=cv.matFromArray(
+  4,1,cv.CV_32FC2,
+  [
+   tl.x,tl.y,
+   tr.x,tr.y,
+   br.x,br.y,
+   bl.x,bl.y
+  ]
+ );
+
+ let dstPts=cv.matFromArray(
+  4,1,cv.CV_32FC2,
+  [
+   0,0,
+   width,0,
+   width,height,
+   0,height
+  ]
+ );
+
+ let M=cv.getPerspectiveTransform(
+  srcPts,
+  dstPts
+ );
+
+ cv.warpPerspective(
+  src,
+  dst,
+  M,
+  new cv.Size(width,height)
+ );
+
+ let canvas=document.createElement("canvas");
+
+ canvas.width=width;
+ canvas.height=height;
+
+ cv.imshow(canvas,dst);
+
+ let result=canvas.toDataURL(
+  "image/jpeg",
+  .9
+ );
+
+ src.delete();
+ dst.delete();
+ srcPts.delete();
+ dstPts.delete();
+ M.delete();
+
+ return result;
+
+}
+
+
+/* =========================
+   XỬ LÝ FILE
+========================= */
+
+async function processFiles(files){
+
+ status.textContent="Đang scan...";
+
+ for(const file of [...files]){
+
+  const img=await loadImage(file);
+
+  preview.src=URL.createObjectURL(file);
+  preview.style.display="block";
+
+  const corners=findCorners(img);
+
+  const result=scanImage(
+   img,
+   corners
+  );
+
+  scans.push(result);
+
+  const thumb=document.createElement("img");
+
+  thumb.className="thumb";
+  thumb.src=result;
+
+  pages.appendChild(thumb);
+
+ }
+
+ status.textContent=
+  "Đã scan "+scans.length+" trang";
+
+ more.style.display="block";
+ pdf.style.display="block";
+
+}
+
+
+camera.onchange=()=>{
+ processFiles(camera.files);
+};
+
+
+gallery.onchange=()=>{
+ processFiles(gallery.files);
+};
+
+
+more.onclick=()=>{
+ camera.click();
+};
+
+
+/* =========================
+   TẠO PDF
+========================= */
+
+function getBytes(data){
+
+ let binary=atob(
+  data.split(",")[1]
+ );
+
+ let bytes=new Uint8Array(
+  binary.length
+ );
+
+ for(let i=0;i<binary.length;i++)
+  bytes[i]=binary.charCodeAt(i);
+
+ return bytes;
+
+}
+
+
+function getSize(data){
+
+ return new Promise(resolve=>{
+
+  let img=new Image();
+
+  img.onload=()=>{
+
+   resolve([
+    img.naturalWidth,
+    img.naturalHeight
+   ]);
+
+  };
+
+  img.src=data;
+
+ });
+
+}
+
+
+async function createPDF(){
+
+ status.textContent=
+  "Đang tạo PDF...";
+
+ const W=595;
+ const H=842;
+ const M=20;
+
+ let objects=[];
+
+ objects[1]=
+  "<< /Type /Catalog /Pages 2 0 R >>";
+
+ let pageNums=[];
+ let imageNums=[];
+ let contentNums=[];
+
+ let n=3;
+
+ for(let i=0;i<scans.length;i++){
+
+  pageNums.push(n++);
+  imageNums.push(n++);
+  contentNums.push(n++);
+
+ }
+
+ objects[2]=
+  "<< /Type /Pages /Kids ["+
+  pageNums.map(x=>x+" 0 R").join(" ")+
+  "] /Count "+scans.length+" >>";
+
+
+ for(let i=0;i<scans.length;i++){
+
+  let size=await getSize(scans[i]);
+
+  let iw=size[0];
+  let ih=size[1];
+
+  let w=W-M*2;
+  let h=w*ih/iw;
+
+  if(h>H-M*2){
+
+   h=H-M*2;
+   w=h*iw/ih;
+
+  }
+
+  let x=(W-w)/2;
+  let y=(H-h)/2;
+
+  let stream=
+   "q\n"+
+   w+" 0 0 "+h+" "+x+" "+y+
+   " cm\n"+
+   "/Im"+i+" Do\nQ";
+
+  objects[pageNums[i]]=
+   "<< /Type /Page "+
+   "/Parent 2 0 R "+
+   "/MediaBox [0 0 "+W+" "+H+"] "+
+   "/Resources << /XObject << "+
+   "/Im"+i+" "+
+   imageNums[i]+" 0 R >> >> "+
+   "/Contents "+
+   contentNums[i]+" 0 R >>";
+
+  objects[contentNums[i]]=
+   "<< /Length "+
+   stream.length+
+   " >>\nstream\n"+
+   stream+
+   "\nendstream";
+
+  objects[imageNums[i]]={
+   bytes:getBytes(scans[i]),
+   w:iw,
+   h:ih
+  };
+
+ }
+
+
+ let pdf="%PDF-1.4\n";
+ let offsets=[0];
+
+ for(let i=1;i<objects.length;i++){
+
+  offsets[i]=pdf.length;
+
+  pdf+=i+" 0 obj\n";
+
+  let obj=objects[i];
+
+  if(typeof obj==="string"){
+
+   pdf+=obj+
+    "\nendobj\n";
+
+  }else{
+
+   pdf+=
+    "<< /Type /XObject "+
+    "/Subtype /Image "+
+    "/Width "+obj.w+
+    " /Height "+obj.h+
+    " /ColorSpace /DeviceRGB "+
+    "/BitsPerComponent 8 "+
+    "/Filter /DCTDecode "+
+    "/Length "+obj.bytes.length+
+    " >>\nstream\n";
+
+   for(
+    let j=0;
+    j<obj.bytes.length;
+    j++
+   ){
+
+    pdf+=String.fromCharCode(
+     obj.bytes[j]
+    );
+
+   }
+
+   pdf+=
+    "\nendstream\nendobj\n";
+
+  }
+
+ }
+
+
+ let xref=pdf.length;
+
+ pdf+=
+  "xref\n"+
+  "0 "+objects.length+"\n"+
+  "0000000000 65535 f \n";
+
+ for(let i=1;i<objects.length;i++){
+
+  pdf+=
+   String(offsets[i])
+    .padStart(10,"0")+
+   " 00000 n \n";
+
+ }
+
+ pdf+=
+  "trailer\n"+
+  "<< /Size "+objects.length+
+  " /Root 1 0 R >>\n"+
+  "startxref\n"+
+  xref+
+  "\n%%EOF";
+
+
+ let output=
+  new Uint8Array(pdf.length);
+
+ for(let i=0;i<pdf.length;i++){
+
+  output[i]=
+   pdf.charCodeAt(i)&255;
+
+ }
+
+
+ let blob=new Blob(
+  [output],
+  {type:"application/pdf"}
+ );
+
+ let url=
+  URL.createObjectURL(blob);
+
+ let a=document.createElement("a");
+
+ a.href=url;
+ a.download="DocScan.pdf";
+ a.click();
+
+ status.textContent=
+  "✅ Đã tạo DocScan.pdf";
+
+}
+
+
+pdf.onclick=createPDF;
+
+</script>
+
+</body>
+</html>
