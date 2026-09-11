@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover">
+
+<title>DocScan</title>
+
+<script src="https://cdn.jsdelivr.net/npm/quadscan/dist/quadscan.iife.js"></script>
+
+<style>
+*{box-sizing:border-box}
+
+body{
+  margin:0;
+  background:#f5f5f5;
+  color:#111;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+}
+
+header{
+  background:#111;
+  color:#fff;
+  padding:24px 15px;
+  text-align:center;
+  font-size:24px;
+  font-weight:700;
+}
+
+.container{
+  max-width:650px;
+  margin:auto;
+  padding:20px;
+}
+
+.status{
+  background:#fff;
+  border-radius:18px;
+  padding:18px;
+  margin-bottom:18px;
+  text-align:center;
+  box-shadow:0 3px 15px #0001;
+  font-size:17px;
+}
+
+.buttons{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:12px;
+}
+
+button{
+  border:0;
+  border-radius:16px;
+  padding:18px 10px;
+  font-size:18px;
+  font-weight:600;
+  background:#111;
+  color:white;
+}
+
+button:disabled{
+  opacity:.4;
+}
+
+.pdf{
+  width:100%;
+  margin-top:12px;
+  background:#555;
+}
+
+input{
+  display:none;
+}
+
+.page{
+  background:white;
+  border-radius:16px;
+  padding:10px;
+  margin-top:18px;
+  box-shadow:0 3px 15px #0001;
+}
+
+.page img{
+  width:100%;
+  display:block;
+  border-radius:10px;
+}
+
+.remove{
+  width:100%;
+  margin-top:8px;
+  padding:10px;
+  background:#ddd;
+  color:#111;
+  font-size:14px;
+}
+
+.debug{
+  display:none;
+  margin-top:15px;
+  padding:12px;
+  border-radius:12px;
+  background:#fff0f0;
+  color:#b00000;
+  font-size:13px;
+  word-break:break-word;
+}
+</style>
+</head>
+
+<body>
+
+<header>📄 DocScan</header>
+
+<div class="container">
+
+  <div class="status" id="status">
+    ⏳ Đang kiểm tra bộ nhận diện...
+  </div>
+
+  <div class="buttons">
+
+    <button onclick="cameraInput.click()">
+      📷 Chụp
+    </button>
+
+    <button onclick="galleryInput.click()">
+      🖼️ Thư viện
+    </button>
+
+  </div>
+
+  <input
+    id="cameraInput"
+    type="file"
+    accept="image/*"
+    capture="environment"
+  >
+
+  <input
+    id="galleryInput"
+    type="file"
+    accept="image/*"
+    multiple
+  >
+
+  <button
+    class="pdf"
+    id="pdfButton"
+    onclick="makePDF()"
+    disabled
+  >
+    📄 Xuất PDF
+  </button>
+
+  <div id="debug" class="debug"></div>
+
+  <div id="pages"></div>
+
+</div>
+
+
+<script>
+
+const cameraInput =
+  document.getElementById("cameraInput");
+
+const galleryInput =
+  document.getElementById("galleryInput");
+
+const statusBox =
+  document.getElementById("status");
+
+const pagesBox =
+  document.getElementById("pages");
+
+const pdfButton =
+  document.getElementById("pdfButton");
+
+const debugBox =
+  document.getElementById("debug");
+
+let pages = [];
+
+
+/* =========================
+   KIỂM TRA QUADSCAN
+========================= */
+
+function checkQuadscan(){
+
+  if(typeof Quadscan === "undefined"){
+
+    statusBox.innerHTML =
+      "❌ Không tải được bộ nhận diện AI";
+
+    showDebug(
+      "Quadscan không tồn tại. CDN có thể chưa tải được."
+    );
+
+    return false;
+  }
+
+  statusBox.innerHTML =
+    "🟢 AI sẵn sàng";
+
+  return true;
+}
+
+
+/* =========================
+   DEBUG
+========================= */
+
+function showDebug(message){
+
+  debugBox.style.display = "block";
+
+  debugBox.innerHTML =
+    "<b>Chi tiết lỗi:</b><br>" +
+    escapeHtml(String(message));
+
+}
+
+function hideDebug(){
+
+  debugBox.style.display = "none";
+
+}
+
+function escapeHtml(text){
+
+  return text
+    .replaceAll("&","&amp;")
+    .replaceAll("<","&lt;")
+    .replaceAll(">","&gt;")
+    .replaceAll('"',"&quot;")
+    .replaceAll("'","&#039;");
+
+}
+
+
+/* =========================
+   CAMERA
+========================= */
+
+cameraInput.addEventListener(
+  "change",
+  async function(){
+
+    if(this.files && this.files[0]){
+
+      await scanFile(this.files[0]);
+
+    }
+
+    this.value = "";
+
+  }
+);
+
+
+/* =========================
+   THƯ VIỆN
+========================= */
+
+galleryInput.addEventListener(
+  "change",
+  async function(){
+
+    if(!this.files) return;
+
+    for(const file of this.files){
+
+      await scanFile(file);
+
+    }
+
+    this.value = "";
+
+  }
+);
+
+
+/* =========================
+   QUÉT
+========================= */
+
+async function scanFile(file){
+
+  hideDebug();
+
+  if(!checkQuadscan()) return;
+
+  statusBox.innerHTML =
+    "🤖 AI đang tìm 4 góc tài liệu...";
+
+  pdfButton.disabled = true;
+
+  try{
+
+    console.log("FILE:",file);
+
+    const result =
+      await Quadscan.scan(
+        file,
+        {
+          mode:"extract"
+        }
+      );
+
+    console.log(
+      "QUADSCAN RESULT:",
+      result
+    );
+
+    if(!result){
+
+      throw new Error(
+        "Quadscan không trả về kết quả."
+      );
+
+    }
+
+    if(!result.success){
+
+      throw new Error(
+        "AI không tìm được 4 góc. " +
+        JSON.stringify(result)
+      );
+
+    }
+
+    if(!result.output){
+
+      throw new Error(
+        "AI tìm được tài liệu nhưng không tạo được ảnh kết quả."
+      );
+
+    }
+
+    const canvas =
+      result.output;
+
+    const imageData =
+      canvas.toDataURL(
+        "image/jpeg",
+        0.94
+      );
+
+    pages.push(imageData);
+
+    renderPages();
+
+    statusBox.innerHTML =
+      "✅ Đã tự động căn thẳng tài liệu";
+
+    pdfButton.disabled = false;
+
+  }
+  catch(error){
+
+    console.error(
+      "DOCSCAN ERROR:",
+      error
+    );
+
+    statusBox.innerHTML =
+      "❌ Quét tài liệu thất bại";
+
+    showDebug(
+      error &&
+      error.message
+        ? error.message
+        : error
+    );
+
+  }
+
+}
+
+
+/* =========================
+   HIỂN THỊ ẢNH
+========================= */
+
+function renderPages(){
+
+  pagesBox.innerHTML = "";
+
+  pages.forEach(
+    (src,index)=>{
+
+      const page =
+        document.createElement("div");
+
+      page.className = "page";
+
+      page.innerHTML = `
+        <img src="${src}">
+        <button
+          class="remove"
+          onclick="removePage(${index})"
+        >
+          🗑️ Xóa trang ${index+1}
+        </button>
+      `;
+
+      pagesBox.appendChild(page);
+
+    }
+  );
+
+}
+
+
+/* =========================
+   XÓA TRANG
+========================= */
+
+function removePage(index){
+
+  pages.splice(index,1);
+
+  renderPages();
+
+  pdfButton.disabled =
+    pages.length === 0;
+
+}
+
+
+/* =========================
+   PDF
+========================= */
+
+async function makePDF(){
+
+  if(!pages.length) return;
+
+  statusBox.innerHTML =
+    "📄 Đang tạo PDF...";
+
+  try{
+
+    if(!window.jspdf){
+
+      await loadJsPDF();
+
+    }
+
+    const jsPDF =
+      window.jspdf.jsPDF;
+
+    let pdf = null;
+
+    for(let i=0;i<pages.length;i++){
+
+      const img =
+        new Image();
+
+      await new Promise(
+        (resolve,reject)=>{
+
+          img.onload = resolve;
+          img.onerror = reject;
+          img.src = pages[i];
+
+        }
+      );
+
+      const width =
+        img.naturalWidth;
+
+      const height =
+        img.naturalHeight;
+
+      const orientation =
+        width > height
+          ? "landscape"
+          : "portrait";
+
+      if(i === 0){
+
+        pdf = new jsPDF({
+          orientation:orientation,
+          unit:"px",
+          format:[width,height]
+        });
+
+      }else{
+
+        pdf.addPage(
+          [width,height],
+          orientation
+        );
+
+      }
+
+      pdf.addImage(
+        pages[i],
+        "JPEG",
+        0,
+        0,
+        width,
+        height
+      );
+
+    }
+
+    pdf.save(
+      "DocScan-" +
+      new Date()
+        .toISOString()
+        .slice(0,10) +
+      ".pdf"
+    );
+
+    statusBox.innerHTML =
+      "✅ Đã tạo PDF";
+
+  }
+  catch(error){
+
+    statusBox.innerHTML =
+      "❌ Không tạo được PDF";
+
+    showDebug(
+      error.message || error
+    );
+
+  }
+
+}
+
+
+/* =========================
+   LOAD JSPDF
+========================= */
+
+function loadJsPDF(){
+
+  return new Promise(
+    (resolve,reject)=>{
+
+      const script =
+        document.createElement("script");
+
+      script.src =
+        "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+
+      script.onload = resolve;
+
+      script.onerror =
+        () => reject(
+          new Error(
+            "Không tải được thư viện PDF."
+          )
+        );
+
+      document.head.appendChild(script);
+
+    }
+  );
+
+}
+
+
+/* =========================
+   KHỞI ĐỘNG
+========================= */
+
+window.addEventListener(
+  "load",
+  function(){
+
+    setTimeout(
+      checkQuadscan,
+      500
+    );
+
+  }
+);
+
+</script>
+
+</body>
+</html>
