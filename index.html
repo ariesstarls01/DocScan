@@ -1,0 +1,1442 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111">
+<title>DocScan</title>
+
+<style>
+*{box-sizing:border-box}
+
+body{
+  margin:0;
+  background:#111;
+  color:#fff;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+}
+
+header{
+  text-align:center;
+  font-size:26px;
+  font-weight:700;
+  padding:24px 10px 8px;
+}
+
+#status{
+  text-align:center;
+  color:#aaa;
+  font-size:15px;
+  min-height:24px;
+  padding:4px 10px 12px;
+}
+
+.buttons{
+  display:grid;
+  grid-template-columns:1fr 1fr 1fr;
+  gap:10px;
+  padding:0 12px 14px;
+}
+
+button{
+  border:0;
+  border-radius:15px;
+  padding:17px 5px;
+  background:#292929;
+  color:#fff;
+  font-size:17px;
+  font-weight:600;
+}
+
+button:active{
+  transform:scale(.97);
+}
+
+input{
+  display:none;
+}
+
+#preview{
+  width:calc(100% - 24px);
+  margin:0 12px 12px;
+  border-radius:14px;
+  display:block;
+}
+
+#pages{
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:8px;
+  padding:10px 12px;
+}
+
+.thumb{
+  position:relative;
+  overflow:hidden;
+  border-radius:10px;
+  background:#222;
+}
+
+.thumb img{
+  width:100%;
+  display:block;
+}
+
+.thumb span{
+  position:absolute;
+  right:5px;
+  top:5px;
+  background:#000b;
+  padding:3px 7px;
+  border-radius:10px;
+  font-size:12px;
+}
+
+#pdfBtn{
+  background:#292929;
+}
+
+#clearBtn{
+  width:calc(100% - 24px);
+  margin:5px 12px 10px;
+  background:#444;
+}
+
+</style>
+</head>
+
+<body>
+
+<header>📄 DocScan</header>
+
+<div id="status">Sẵn sàng</div>
+
+<div class="buttons">
+  <button onclick="camera.click()">📷 Chụp</button>
+  <button onclick="gallery.click()">🖼️ Thư viện</button>
+  <button onclick="makePDF()" id="pdfBtn">📄 PDF</button>
+</div>
+
+<input id="camera" type="file" accept="image/*" capture="environment">
+<input id="gallery" type="file" accept="image/*">
+
+<img id="preview">
+
+<div id="pages"></div>
+
+<button id="clearBtn" onclick="clearPages()" style="display:none">
+  🗑️ Xóa tất cả
+</button>
+
+
+<script>
+
+const camera=document.getElementById("camera");
+const gallery=document.getElementById("gallery");
+const preview=document.getElementById("preview");
+const pagesBox=document.getElementById("pages");
+const statusBox=document.getElementById("status");
+const pdfBtn=document.getElementById("pdfBtn");
+const clearBtn=document.getElementById("clearBtn");
+
+let pages=[];
+
+camera.onchange=handleFile;
+gallery.onchange=handleFile;
+
+
+/* =========================
+   TRẠNG THÁI
+========================= */
+
+function status(text){
+  statusBox.textContent=text;
+}
+
+
+/* =========================
+   ĐỌC ẢNH
+========================= */
+
+function handleFile(e){
+
+  const file=e.target.files[0];
+
+  if(!file)return;
+
+  status("⏳ Đang tự nhận diện 4 góc...");
+
+  const reader=new FileReader();
+
+  reader.onload=function(){
+
+    const img=new Image();
+
+    img.onload=function(){
+
+      setTimeout(function(){
+
+        try{
+
+          const result=scanDocument(img);
+
+          pages.push(result);
+
+          preview.src=result;
+
+          showPage(result);
+
+          clearBtn.style.display="block";
+
+          status("✅ Đã tự căn 4 góc");
+
+        }catch(error){
+
+          console.error(error);
+
+          pages.push(img.src);
+
+          preview.src=img.src;
+
+          showPage(img.src);
+
+          clearBtn.style.display="block";
+
+          status("⚠️ Không nhận diện được — giữ ảnh gốc");
+        }
+
+      },30);
+    };
+
+    img.src=reader.result;
+  };
+
+  reader.readAsDataURL(file);
+
+  e.target.value="";
+}
+
+
+/* =========================
+   NHẬN DIỆN TÀI LIỆU
+========================= */
+
+function scanDocument(img){
+
+  const MAX=900;
+
+  const scale=Math.min(
+    1,
+    MAX/Math.max(img.width,img.height)
+  );
+
+  const w=Math.max(
+    200,
+    Math.round(img.width*scale)
+  );
+
+  const h=Math.max(
+    200,
+    Math.round(img.height*scale)
+  );
+
+  const canvas=document.createElement("canvas");
+
+  canvas.width=w;
+  canvas.height=h;
+
+  const ctx=canvas.getContext(
+    "2d",
+    {willReadFrequently:true}
+  );
+
+  ctx.drawImage(img,0,0,w,h);
+
+  const image=ctx.getImageData(0,0,w,h);
+
+  const gray=new Uint8Array(w*h);
+
+  for(let i=0;i<w*h;i++){
+
+    const p=i*4;
+
+    gray[i]=Math.round(
+      .299*image.data[p]+
+      .587*image.data[p+1]+
+      .114*image.data[p+2]
+    );
+  }
+
+
+  /*
+    TÌM NGƯỠNG SÁNG
+
+    Tờ giấy thường sáng hơn nền.
+    Lấy histogram để tự điều chỉnh.
+  */
+
+  const hist=new Array(256).fill(0);
+
+  for(let i=0;i<gray.length;i++){
+    hist[gray[i]]++;
+  }
+
+  let total=gray.length;
+  let acc=0;
+  let threshold=170;
+
+  for(let i=0;i<256;i++){
+
+    acc+=hist[i];
+
+    if(acc>total*.72){
+
+      threshold=Math.max(
+        125,
+        Math.min(220,i)
+      );
+
+      break;
+    }
+  }
+
+
+  /*
+    Tạo mask vùng giấy
+  */
+
+  let mask=new Uint8Array(w*h);
+
+  for(let i=0;i<gray.length;i++){
+
+    mask[i]=gray[i]>=threshold?1:0;
+  }
+
+
+  /*
+    MORPHOLOGICAL CLOSE
+
+    Làm liền các vùng giấy bị đứt
+    bởi chữ/bóng.
+  */
+
+  for(let pass=0;pass<2;pass++){
+
+    const out=new Uint8Array(mask);
+
+    for(let y=1;y<h-1;y++){
+
+      for(let x=1;x<w-1;x++){
+
+        const p=y*w+x;
+
+        let n=0;
+
+        for(let dy=-1;dy<=1;dy++){
+
+          for(let dx=-1;dx<=1;dx++){
+
+            if(mask[(y+dy)*w+(x+dx)])
+              n++;
+          }
+        }
+
+        if(n>=5)
+          out[p]=1;
+      }
+    }
+
+    mask=out;
+  }
+
+
+  /*
+    TÌM VÙNG LIÊN THÔNG LỚN NHẤT
+  */
+
+  const visited=new Uint8Array(w*h);
+
+  let best=null;
+
+  for(let y=0;y<h;y++){
+
+    for(let x=0;x<w;x++){
+
+      const start=y*w+x;
+
+      if(!mask[start]||visited[start])
+        continue;
+
+      const queue=[start];
+
+      visited[start]=1;
+
+      const points=[];
+
+      let head=0;
+
+      while(head<queue.length){
+
+        const p=queue[head++];
+
+        const px=p%w;
+        const py=Math.floor(p/w);
+
+        points.push([px,py]);
+
+        const ns=[
+          p-1,
+          p+1,
+          p-w,
+          p+w
+        ];
+
+        for(const q of ns){
+
+          if(q<0||q>=w*h)
+            continue;
+
+          if(visited[q]||!mask[q])
+            continue;
+
+          const qx=q%w;
+          const qy=Math.floor(q/w);
+
+          if(Math.abs(qx-px)>1||
+             Math.abs(qy-py)>1)
+            continue;
+
+          visited[q]=1;
+          queue.push(q);
+        }
+      }
+
+      if(
+        !best||
+        points.length>best.length
+      ){
+        best=points;
+      }
+    }
+  }
+
+
+  /*
+    Nếu vùng sáng không đủ lớn,
+    chuyển sang nhận diện bằng EDGE.
+  */
+
+  let corners=null;
+
+  if(best){
+
+    const area=best.length;
+
+    if(area>w*h*.12){
+
+      const hull=convexHull(best);
+
+      if(hull.length>=4){
+
+        corners=findCorners(hull);
+      }
+    }
+  }
+
+
+  /*
+    FALLBACK EDGE
+
+    Nếu mask không tìm được giấy,
+    tìm các điểm biên mạnh.
+  */
+
+  if(!corners){
+
+    corners=findCornersFromEdges(
+      gray,
+      w,
+      h
+    );
+  }
+
+
+  /*
+    Nếu vẫn không đủ tin cậy,
+    giữ ảnh gốc.
+  */
+
+  if(!corners){
+
+    return img.src;
+  }
+
+
+  /*
+    Đổi tọa độ về ảnh gốc
+  */
+
+  corners=corners.map(p=>[
+    p[0]/scale,
+    p[1]/scale
+  ]);
+
+
+  /*
+    WARP PHỐI CẢNH
+  */
+
+  return perspectiveWarp(
+    img,
+    corners
+  );
+}
+
+
+/* =========================
+   CONVEX HULL
+========================= */
+
+function convexHull(points){
+
+  const pts=points
+    .slice()
+    .sort((a,b)=>
+      a[0]-b[0]||
+      a[1]-b[1]
+    );
+
+  if(pts.length<=3)
+    return pts;
+
+  function cross(o,a,b){
+
+    return(
+      (a[0]-o[0])*(b[1]-o[1])-
+      (a[1]-o[1])*(b[0]-o[0])
+    );
+  }
+
+  const lower=[];
+
+  for(const p of pts){
+
+    while(
+      lower.length>=2 &&
+      cross(
+        lower[lower.length-2],
+        lower[lower.length-1],
+        p
+      )<=0
+    ){
+      lower.pop();
+    }
+
+    lower.push(p);
+  }
+
+  const upper=[];
+
+  for(let i=pts.length-1;i>=0;i--){
+
+    const p=pts[i];
+
+    while(
+      upper.length>=2 &&
+      cross(
+        upper[upper.length-2],
+        upper[upper.length-1],
+        p
+      )<=0
+    ){
+      upper.pop();
+    }
+
+    upper.push(p);
+  }
+
+  upper.pop();
+  lower.pop();
+
+  return lower.concat(upper);
+}
+
+
+/* =========================
+   LẤY 4 GÓC TỪ HULL
+========================= */
+
+function findCorners(hull){
+
+  if(hull.length<4)
+    return null;
+
+
+  /*
+    Giảm số điểm để tính nhanh
+  */
+
+  let pts=hull;
+
+  if(pts.length>150){
+
+    const step=pts.length/150;
+
+    pts=[];
+
+    for(let i=0;i<150;i++){
+
+      pts.push(
+        hull[Math.floor(i*step)]
+      );
+    }
+  }
+
+
+  let tl=null;
+  let tr=null;
+  let br=null;
+  let bl=null;
+
+  let minSum=Infinity;
+  let maxSum=-Infinity;
+  let minDiff=Infinity;
+  let maxDiff=-Infinity;
+
+
+  for(const p of pts){
+
+    const sum=p[0]+p[1];
+    const diff=p[0]-p[1];
+
+    if(sum<minSum){
+
+      minSum=sum;
+      tl=p;
+    }
+
+    if(sum>maxSum){
+
+      maxSum=sum;
+      br=p;
+    }
+
+    if(diff>maxDiff){
+
+      maxDiff=diff;
+      tr=p;
+    }
+
+    if(diff<minDiff){
+
+      minDiff=diff;
+      bl=p;
+    }
+  }
+
+
+  if(!tl||!tr||!br||!bl)
+    return null;
+
+
+  const result=[
+    tl,
+    tr,
+    br,
+    bl
+  ];
+
+
+  /*
+    Kiểm tra 4 điểm không bị trùng
+  */
+
+  for(let i=0;i<4;i++){
+
+    for(let j=i+1;j<4;j++){
+
+      if(distance(result[i],result[j])<20)
+        return null;
+    }
+  }
+
+
+  /*
+    Kiểm tra diện tích
+  */
+
+  const area=polygonArea(result);
+
+  const minX=Math.min(...pts.map(p=>p[0]));
+  const maxX=Math.max(...pts.map(p=>p[0]));
+  const minY=Math.min(...pts.map(p=>p[1]));
+  const maxY=Math.max(...pts.map(p=>p[1]));
+
+  const boxArea=
+    (maxX-minX)*(maxY-minY);
+
+  if(
+    boxArea<=0||
+    area<boxArea*.45
+  ){
+    return null;
+  }
+
+  return result;
+}
+
+
+/* =========================
+   EDGE DETECTION FALLBACK
+========================= */
+
+function findCornersFromEdges(gray,w,h){
+
+  const edges=[];
+
+  /*
+    Sobel đơn giản
+  */
+
+  for(let y=2;y<h-2;y+=2){
+
+    for(let x=2;x<w-2;x+=2){
+
+      const p=y*w+x;
+
+      const gx=
+        -gray[p-w-1]
+        -2*gray[p-1]
+        -gray[p+w-1]
+        +gray[p-w+1]
+        +2*gray[p+1]
+        +gray[p+w+1];
+
+      const gy=
+        -gray[p-w-1]
+        -2*gray[p-w]
+        -gray[p-w+1]
+        +gray[p+w-1]
+        +2*gray[p+w]
+        +gray[p+w+1];
+
+      const mag=
+        Math.abs(gx)+Math.abs(gy);
+
+      if(mag>180){
+
+        edges.push([
+          x,
+          y,
+          mag
+        ]);
+      }
+    }
+  }
+
+  if(edges.length<30)
+    return null;
+
+
+  /*
+    Chọn các edge mạnh nhất
+  */
+
+  edges.sort((a,b)=>b[2]-a[2]);
+
+  const selected=edges.slice(
+    0,
+    Math.min(2500,edges.length)
+  );
+
+
+  /*
+    4 vùng ảnh
+  */
+
+  const groups=[
+    [],
+    [],
+    [],
+    []
+  ];
+
+  const cx=w/2;
+  const cy=h/2;
+
+  for(const p of selected){
+
+    const x=p[0];
+    const y=p[1];
+
+    if(x<cx&&y<cy)
+      groups[0].push(p);
+
+    else if(x>=cx&&y<cy)
+      groups[1].push(p);
+
+    else if(x>=cx&&y>=cy)
+      groups[2].push(p);
+
+    else
+      groups[3].push(p);
+  }
+
+
+  if(groups.some(g=>g.length<2))
+    return null;
+
+
+  function bestPoint(group,type){
+
+    let best=null;
+    let bestScore=-Infinity;
+
+    for(const p of group){
+
+      const x=p[0];
+      const y=p[1];
+
+      let score=0;
+
+      if(type==="tl")
+        score=(w-x)+(h-y);
+
+      if(type==="tr")
+        score=x+(h-y);
+
+      if(type==="br")
+        score=x+y;
+
+      if(type==="bl")
+        score=(w-x)+y;
+
+      score+=p[2]*.3;
+
+      if(score>bestScore){
+
+        bestScore=score;
+        best=p;
+      }
+    }
+
+    return best;
+  }
+
+
+  const result=[
+    bestPoint(groups[0],"tl"),
+    bestPoint(groups[1],"tr"),
+    bestPoint(groups[2],"br"),
+    bestPoint(groups[3],"bl")
+  ];
+
+
+  if(result.some(x=>!x))
+    return null;
+
+
+  return result.map(p=>[
+    p[0],
+    p[1]
+  ]);
+}
+
+
+/* =========================
+   DIỆN TÍCH
+========================= */
+
+function polygonArea(p){
+
+  let sum=0;
+
+  for(let i=0;i<p.length;i++){
+
+    const j=(i+1)%p.length;
+
+    sum+=
+      p[i][0]*p[j][1]-
+      p[j][0]*p[i][1];
+  }
+
+  return Math.abs(sum)/2;
+}
+
+
+/* =========================
+   KHOẢNG CÁCH
+========================= */
+
+function distance(a,b){
+
+  return Math.hypot(
+    a[0]-b[0],
+    a[1]-b[1]
+  );
+}
+
+
+/* =========================
+   PERSPECTIVE WARP
+========================= */
+
+function perspectiveWarp(img,corners){
+
+  let [tl,tr,br,bl]=corners;
+
+
+  /*
+    Kích thước đầu ra
+  */
+
+  const top=distance(tl,tr);
+  const bottom=distance(bl,br);
+
+  const left=distance(tl,bl);
+  const right=distance(tr,br);
+
+  let outW=Math.round(
+    Math.max(top,bottom)
+  );
+
+  let outH=Math.round(
+    Math.max(left,right)
+  );
+
+
+  /*
+    Giới hạn kích thước
+  */
+
+  const maxW=1800;
+  const maxH=2400;
+
+  const factor=Math.min(
+    1,
+    maxW/outW,
+    maxH/outH
+  );
+
+  outW=Math.max(
+    500,
+    Math.round(outW*factor)
+  );
+
+  outH=Math.max(
+    500,
+    Math.round(outH*factor)
+  );
+
+
+  /*
+    Homography:
+    output rectangle -> source quadrilateral
+  */
+
+  const dst=[
+    [0,0],
+    [outW-1,0],
+    [outW-1,outH-1],
+    [0,outH-1]
+  ];
+
+  const H=computeHomography(
+    dst,
+    [tl,tr,br,bl]
+  );
+
+  if(!H)
+    return img.src;
+
+
+  const srcCanvas=document.createElement(
+    "canvas"
+  );
+
+  srcCanvas.width=img.width;
+  srcCanvas.height=img.height;
+
+  const sctx=srcCanvas.getContext(
+    "2d",
+    {willReadFrequently:true}
+  );
+
+  sctx.drawImage(
+    img,
+    0,
+    0
+  );
+
+  const src=sctx.getImageData(
+    0,
+    0,
+    img.width,
+    img.height
+  );
+
+
+  const outCanvas=document.createElement(
+    "canvas"
+  );
+
+  outCanvas.width=outW;
+  outCanvas.height=outH;
+
+  const octx=outCanvas.getContext(
+    "2d"
+  );
+
+  const out=octx.createImageData(
+    outW,
+    outH
+  );
+
+
+  /*
+    Bilinear interpolation
+  */
+
+  for(let y=0;y<outH;y++){
+
+    for(let x=0;x<outW;x++){
+
+      const den=
+        H[6]*x+
+        H[7]*y+
+        1;
+
+      const sx=(
+        H[0]*x+
+        H[1]*y+
+        H[2]
+      )/den;
+
+      const sy=(
+        H[3]*x+
+        H[4]*y+
+        H[5]
+      )/den;
+
+
+      const ix=Math.floor(sx);
+      const iy=Math.floor(sy);
+
+      const fx=sx-ix;
+      const fy=sy-iy;
+
+
+      const oi=(y*outW+x)*4;
+
+
+      if(
+        ix<0||
+        iy<0||
+        ix>=img.width-1||
+        iy>=img.height-1
+      ){
+
+        out.data[oi]=255;
+        out.data[oi+1]=255;
+        out.data[oi+2]=255;
+        out.data[oi+3]=255;
+
+        continue;
+      }
+
+
+      const p00=(iy*img.width+ix)*4;
+      const p10=p00+4;
+      const p01=p00+img.width*4;
+      const p11=p01+4;
+
+
+      for(let c=0;c<3;c++){
+
+        const a=
+          src.data[p00+c]*(1-fx)+
+          src.data[p10+c]*fx;
+
+        const b=
+          src.data[p01+c]*(1-fx)+
+          src.data[p11+c]*fx;
+
+        out.data[oi+c]=
+          Math.round(
+            a*(1-fy)+b*fy
+          );
+      }
+
+      out.data[oi+3]=255;
+    }
+  }
+
+
+  octx.putImageData(
+    out,
+    0,
+    0
+  );
+
+
+  return outCanvas.toDataURL(
+    "image/jpeg",
+    .94
+  );
+}
+
+
+/* =========================
+   HOMOGRAPHY
+========================= */
+
+function computeHomography(src,dst){
+
+  const A=[];
+  const B=[];
+
+
+  for(let i=0;i<4;i++){
+
+    const x=src[i][0];
+    const y=src[i][1];
+
+    const X=dst[i][0];
+    const Y=dst[i][1];
+
+
+    A.push([
+      x,y,1,
+      0,0,0,
+      -X*x,-X*y
+    ]);
+
+    B.push(X);
+
+
+    A.push([
+      0,0,0,
+      x,y,1,
+      -Y*x,-Y*y
+    ]);
+
+    B.push(Y);
+  }
+
+
+  const h=solveLinear(
+    A,
+    B
+  );
+
+  if(!h)
+    return null;
+
+  return [
+    h[0],h[1],h[2],
+    h[3],h[4],h[5],
+    h[6],h[7]
+  ];
+}
+
+
+/* =========================
+   GAUSS
+========================= */
+
+function solveLinear(A,b){
+
+  const n=A.length;
+
+  const M=A.map(
+    (row,i)=>row.concat([b[i]])
+  );
+
+
+  for(let col=0;col<n;col++){
+
+    let pivot=col;
+
+    for(
+      let row=col+1;
+      row<n;
+      row++
+    ){
+
+      if(
+        Math.abs(M[row][col])>
+        Math.abs(M[pivot][col])
+      ){
+        pivot=row;
+      }
+    }
+
+
+    if(
+      Math.abs(M[pivot][col])<
+      1e-10
+    ){
+      return null;
+    }
+
+
+    [
+      M[col],
+      M[pivot]
+    ]=[
+      M[pivot],
+      M[col]
+    ];
+
+
+    const div=M[col][col];
+
+
+    for(let j=col;j<=n;j++){
+
+      M[col][j]/=div;
+    }
+
+
+    for(let row=0;row<n;row++){
+
+      if(row===col)
+        continue;
+
+      const factor=M[row][col];
+
+      for(
+        let j=col;
+        j<=n;
+        j++
+      ){
+
+        M[row][j]-=
+          factor*M[col][j];
+      }
+    }
+  }
+
+
+  return M.map(
+    row=>row[n]
+  );
+}
+
+
+/* =========================
+   HIỂN THỊ TRANG
+========================= */
+
+function showPage(src){
+
+  const box=document.createElement(
+    "div"
+  );
+
+  box.className="thumb";
+
+
+  const img=document.createElement(
+    "img"
+  );
+
+  img.src=src;
+
+
+  const number=document.createElement(
+    "span"
+  );
+
+  number.textContent=pages.length;
+
+
+  box.appendChild(img);
+  box.appendChild(number);
+
+  pagesBox.appendChild(box);
+}
+
+
+/* =========================
+   XÓA
+========================= */
+
+function clearPages(){
+
+  pages=[];
+
+  preview.removeAttribute("src");
+
+  pagesBox.innerHTML="";
+
+  clearBtn.style.display="none";
+
+  status("Sẵn sàng");
+}
+
+
+/* =========================
+   PDF
+========================= */
+
+async function makePDF(){
+
+  if(!pages.length){
+
+    alert(
+      "Hãy chụp hoặc chọn ảnh trước."
+    );
+
+    return;
+  }
+
+
+  status("⏳ Đang tạo PDF...");
+
+  pdfBtn.disabled=true;
+
+
+  try{
+
+    await loadJsPDF();
+
+    const jsPDF=
+      window.jspdf.jsPDF;
+
+
+    const pdf=new jsPDF({
+      orientation:"p",
+      unit:"mm",
+      format:"a4"
+    });
+
+
+    for(
+      let i=0;
+      i<pages.length;
+      i++
+    ){
+
+      if(i>0)
+        pdf.addPage();
+
+
+      const img=
+        await loadImage(
+          pages[i]
+        );
+
+
+      const ratio=
+        img.width/img.height;
+
+
+      let w=190;
+      let h=w/ratio;
+
+
+      if(h>277){
+
+        h=277;
+        w=h*ratio;
+      }
+
+
+      pdf.addImage(
+        img,
+        "JPEG",
+        (210-w)/2,
+        (297-h)/2,
+        w,
+        h
+      );
+    }
+
+
+    pdf.save(
+      "DocScan-"+Date.now()+".pdf"
+    );
+
+
+    status("✅ Đã tạo PDF");
+
+  }catch(error){
+
+    console.error(error);
+
+    status("❌ Lỗi tạo PDF");
+
+    alert(
+      "Không tạo được PDF."
+    );
+
+  }finally{
+
+    pdfBtn.disabled=false;
+  }
+}
+
+
+/* =========================
+   JSPDF
+========================= */
+
+function loadJsPDF(){
+
+  if(window.jspdf)
+    return Promise.resolve();
+
+
+  return new Promise(
+    function(resolve,reject){
+
+      const script=
+        document.createElement(
+          "script"
+        );
+
+
+      script.src=
+        "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+
+
+      script.onload=resolve;
+
+      script.onerror=reject;
+
+
+      document.head.appendChild(
+        script
+      );
+    }
+  );
+}
+
+
+/* =========================
+   LOAD IMAGE
+========================= */
+
+function loadImage(url){
+
+  return new Promise(
+    function(resolve,reject){
+
+      const img=new Image();
+
+      img.onload=function(){
+        resolve(img);
+      };
+
+      img.onerror=reject;
+
+      img.src=url;
+    }
+  );
+}
+
+</script>
+
+</body>
+</html>
