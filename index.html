@@ -1,0 +1,2003 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+
+<meta name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover">
+
+<meta name="theme-color" content="#111111">
+
+<title>DocScan</title>
+
+<style>
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    background: #111;
+    color: #fff;
+    font-family:
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+}
+
+header {
+    text-align: center;
+    padding: 28px 10px 5px;
+    font-size: 30px;
+    font-weight: 700;
+}
+
+.subtitle {
+    text-align: center;
+    color: #aaa;
+    font-size: 16px;
+    margin: 8px 0 22px;
+}
+
+.buttons {
+    display: flex;
+    gap: 10px;
+    padding: 0 14px;
+}
+
+button {
+    flex: 1;
+    border: 0;
+    border-radius: 16px;
+    padding: 16px 5px;
+    font-size: 17px;
+    font-weight: 700;
+    background: #fff;
+    color: #111;
+}
+
+button.dark {
+    background: #333;
+    color: #fff;
+}
+
+button:disabled {
+    opacity: .4;
+}
+
+button:active {
+    transform: scale(.97);
+}
+
+input {
+    display: none;
+}
+
+#status {
+    text-align: center;
+    color: #aaa;
+    font-size: 15px;
+    min-height: 26px;
+    margin: 20px 15px 12px;
+}
+
+#pages {
+    padding: 0 12px 40px;
+}
+
+.page {
+    background: #222;
+    border-radius: 15px;
+    padding: 10px;
+    margin-bottom: 16px;
+}
+
+.page img {
+    width: 100%;
+    display: block;
+    border-radius: 9px;
+}
+
+.page-title {
+    text-align: center;
+    color: #aaa;
+    font-size: 13px;
+    margin-top: 8px;
+}
+
+canvas {
+    display: none;
+}
+
+</style>
+</head>
+
+
+<body>
+
+<header>📄 DocScan</header>
+
+<div class="subtitle">
+Tự động nhận diện mép giấy
+</div>
+
+
+<div class="buttons">
+
+<button id="cameraBtn">
+📷 Chụp
+</button>
+
+<button id="galleryBtn" class="dark">
+🖼️ Thư viện
+</button>
+
+<button id="pdfBtn" class="dark">
+📑 PDF
+</button>
+
+</div>
+
+
+<input
+    id="cameraInput"
+    type="file"
+    accept="image/*"
+    capture="environment"
+>
+
+<input
+    id="galleryInput"
+    type="file"
+    accept="image/*"
+    multiple
+>
+
+
+<div id="status">
+⏳ Đang tải bộ nhận diện...
+</div>
+
+
+<div id="pages"></div>
+
+<canvas id="canvas"></canvas>
+
+
+<script>
+
+/* =====================================================
+   BIẾN
+===================================================== */
+
+let cvReady = false;
+
+let pages = [];
+
+const cameraBtn =
+    document.getElementById("cameraBtn");
+
+const galleryBtn =
+    document.getElementById("galleryBtn");
+
+const pdfBtn =
+    document.getElementById("pdfBtn");
+
+const cameraInput =
+    document.getElementById("cameraInput");
+
+const galleryInput =
+    document.getElementById("galleryInput");
+
+const statusBox =
+    document.getElementById("status");
+
+const pagesBox =
+    document.getElementById("pages");
+
+const canvas =
+    document.getElementById("canvas");
+
+
+cameraBtn.disabled = true;
+galleryBtn.disabled = true;
+
+
+/* =====================================================
+   TẢI OPENCV
+===================================================== */
+
+async function loadOpenCV() {
+
+    statusBox.innerText =
+        "⏳ Đang tải bộ nhận diện...";
+
+
+    /*
+       Nguồn chính:
+       TechStark OpenCV 5
+    */
+
+    const sources = [
+
+        "https://cdn.jsdelivr.net/npm/@techstark/opencv-js@5.0.0-release.1/dist/opencv.js",
+
+        /*
+           Nguồn dự phòng
+        */
+
+        "https://cdn.jsdelivr.net/npm/opencv.js@1.2.1/opencv.js"
+
+    ];
+
+
+    for (
+        let sourceIndex = 0;
+        sourceIndex < sources.length;
+        sourceIndex++
+    ) {
+
+        const success =
+            await tryLoadScript(
+                sources[sourceIndex]
+            );
+
+
+        if (!success) {
+
+            continue;
+
+        }
+
+
+        /*
+           Chờ OpenCV WebAssembly
+           khởi tạo hoàn toàn.
+        */
+
+        const ready =
+            await waitForCV(30000);
+
+
+        if (ready) {
+
+            cvReady = true;
+
+            cameraBtn.disabled = false;
+            galleryBtn.disabled = false;
+
+            statusBox.innerText =
+                "✅ Sẵn sàng — hãy chụp hoặc chọn ảnh";
+
+            return;
+
+        }
+
+    }
+
+
+    statusBox.innerText =
+        "❌ Không tải được bộ nhận diện.";
+
+}
+
+
+/* =====================================================
+   LOAD SCRIPT
+===================================================== */
+
+function tryLoadScript(url) {
+
+    return new Promise(
+        function(resolve) {
+
+            /*
+               Nếu cv đã tồn tại thì không tải lại.
+            */
+
+            if (
+                typeof cv !== "undefined"
+            ) {
+
+                resolve(true);
+
+                return;
+
+            }
+
+
+            const script =
+                document.createElement(
+                    "script"
+                );
+
+
+            script.src =
+                url;
+
+
+            script.async =
+                true;
+
+
+            script.onload =
+                function() {
+
+                    resolve(true);
+
+                };
+
+
+            script.onerror =
+                function() {
+
+                    console.log(
+                        "Không tải được:",
+                        url
+                    );
+
+                    resolve(false);
+
+                };
+
+
+            document.head.appendChild(
+                script
+            );
+
+        }
+    );
+
+}
+
+
+/* =====================================================
+   CHỜ OPENCV READY
+===================================================== */
+
+function waitForCV(timeout) {
+
+    return new Promise(
+        function(resolve) {
+
+            const start =
+                Date.now();
+
+
+            const timer =
+                setInterval(
+                    function() {
+
+                        try {
+
+                            if (
+                                typeof cv !== "undefined" &&
+                                cv &&
+                                typeof cv.Mat !== "undefined"
+                            ) {
+
+                                clearInterval(
+                                    timer
+                                );
+
+                                resolve(true);
+
+                                return;
+
+                            }
+
+                        } catch (e) {
+
+                            console.log(e);
+
+                        }
+
+
+                        if (
+                            Date.now() -
+                            start >
+                            timeout
+                        ) {
+
+                            clearInterval(
+                                timer
+                            );
+
+                            resolve(false);
+
+                        }
+
+                    },
+                    300
+                );
+
+        }
+    );
+
+}
+
+
+/* =====================================================
+   START
+===================================================== */
+
+loadOpenCV();
+
+
+/* =====================================================
+   CAMERA
+===================================================== */
+
+cameraBtn.onclick =
+function() {
+
+    if (!cvReady) {
+
+        alert(
+            "Bộ nhận diện chưa tải xong."
+        );
+
+        return;
+
+    }
+
+
+    cameraInput.value = "";
+
+    cameraInput.click();
+
+};
+
+
+/* =====================================================
+   GALLERY
+===================================================== */
+
+galleryBtn.onclick =
+function() {
+
+    if (!cvReady) {
+
+        alert(
+            "Bộ nhận diện chưa tải xong."
+        );
+
+        return;
+
+    }
+
+
+    galleryInput.value = "";
+
+    galleryInput.click();
+
+};
+
+
+/* =====================================================
+   PDF
+===================================================== */
+
+pdfBtn.onclick =
+function() {
+
+    makePDF();
+
+};
+
+
+/* =====================================================
+   INPUT
+===================================================== */
+
+cameraInput.addEventListener(
+    "change",
+    handleFiles
+);
+
+galleryInput.addEventListener(
+    "change",
+    handleFiles
+);
+
+
+/* =====================================================
+   HANDLE FILE
+===================================================== */
+
+async function handleFiles(event) {
+
+    const files =
+        Array.from(
+            event.target.files || []
+        );
+
+
+    if (!files.length) {
+
+        return;
+
+    }
+
+
+    for (
+        let i = 0;
+        i < files.length;
+        i++
+    ) {
+
+        statusBox.innerText =
+            `🔍 Đang tự nhận diện trang ${i + 1}/${files.length}...`;
+
+
+        try {
+
+            const image =
+                await loadImage(
+                    files[i]
+                );
+
+
+            const result =
+                scanDocument(
+                    image
+                );
+
+
+            pages.push(
+                result
+            );
+
+
+            renderPages();
+
+
+        } catch (error) {
+
+            console.error(
+                error
+            );
+
+            alert(
+                "Không xử lý được ảnh."
+            );
+
+        }
+
+    }
+
+
+    statusBox.innerText =
+        `✅ Đã quét ${files.length} trang`;
+
+}
+
+
+/* =====================================================
+   LOAD IMAGE
+===================================================== */
+
+function loadImage(file) {
+
+    return new Promise(
+        function(resolve, reject) {
+
+            const url =
+                URL.createObjectURL(
+                    file
+                );
+
+
+            const img =
+                new Image();
+
+
+            img.onload =
+            function() {
+
+                URL.revokeObjectURL(
+                    url
+                );
+
+                resolve(img);
+
+            };
+
+
+            img.onerror =
+            function() {
+
+                URL.revokeObjectURL(
+                    url
+                );
+
+                reject(
+                    new Error(
+                        "Không đọc được ảnh"
+                    )
+                );
+
+            };
+
+
+            img.src =
+                url;
+
+        }
+    );
+
+}
+
+
+/* =====================================================
+   SCAN
+===================================================== */
+
+function scanDocument(image) {
+
+    const MAX =
+        2200;
+
+
+    const scale =
+        Math.min(
+            1,
+            MAX /
+            Math.max(
+                image.naturalWidth,
+                image.naturalHeight
+            )
+        );
+
+
+    const width =
+        Math.round(
+            image.naturalWidth *
+            scale
+        );
+
+
+    const height =
+        Math.round(
+            image.naturalHeight *
+            scale
+        );
+
+
+    canvas.width =
+        width;
+
+    canvas.height =
+        height;
+
+
+    const ctx =
+        canvas.getContext(
+            "2d",
+            {
+                willReadFrequently: true
+            }
+        );
+
+
+    ctx.drawImage(
+        image,
+        0,
+        0,
+        width,
+        height
+    );
+
+
+    const src =
+        cv.imread(
+            canvas
+        );
+
+
+    let corners = null;
+
+
+    try {
+
+        corners =
+            detectPaper(
+                src
+            );
+
+    } catch (error) {
+
+        console.error(
+            error
+        );
+
+    }
+
+
+    let output;
+
+
+    if (corners) {
+
+        statusBox.innerText =
+            "✂️ Đã bắt được 4 mép — đang căn thẳng...";
+
+
+        output =
+            correctPerspective(
+                src,
+                corners
+            );
+
+    } else {
+
+        statusBox.innerText =
+            "⚠️ Không chắc mép giấy — giữ ảnh gốc";
+
+
+        output =
+            src.clone();
+
+    }
+
+
+    src.delete();
+
+
+    return matToJPEG(
+        output
+    );
+
+}
+
+
+/* =====================================================
+   DETECT PAPER
+===================================================== */
+
+function detectPaper(src) {
+
+    const W =
+        src.cols;
+
+    const H =
+        src.rows;
+
+
+    const imageArea =
+        W * H;
+
+
+    /* ----------------------------------------------
+       GRAY
+    ---------------------------------------------- */
+
+    const gray =
+        new cv.Mat();
+
+
+    cv.cvtColor(
+        src,
+        gray,
+        cv.COLOR_RGBA2GRAY
+    );
+
+
+    /* ----------------------------------------------
+       BLUR
+    ---------------------------------------------- */
+
+    const blur =
+        new cv.Mat();
+
+
+    cv.GaussianBlur(
+        gray,
+        blur,
+        new cv.Size(
+            5,
+            5
+        ),
+        0
+    );
+
+
+    /* ----------------------------------------------
+       CANNY
+    ---------------------------------------------- */
+
+    const edges =
+        new cv.Mat();
+
+
+    cv.Canny(
+        blur,
+        edges,
+        25,
+        90
+    );
+
+
+    /* ----------------------------------------------
+       MORPH CLOSE
+    ---------------------------------------------- */
+
+    const kernel =
+        cv.getStructuringElement(
+            cv.MORPH_RECT,
+            new cv.Size(
+                9,
+                9
+            )
+        );
+
+
+    cv.morphologyEx(
+        edges,
+        edges,
+        cv.MORPH_CLOSE,
+        kernel
+    );
+
+
+    /* ----------------------------------------------
+       CONTOURS
+    ---------------------------------------------- */
+
+    const contours =
+        new cv.MatVector();
+
+
+    const hierarchy =
+        new cv.Mat();
+
+
+    cv.findContours(
+        edges,
+        contours,
+        hierarchy,
+        cv.RETR_LIST,
+        cv.CHAIN_APPROX_SIMPLE
+    );
+
+
+    let best =
+        null;
+
+    let bestScore =
+        -Infinity;
+
+
+    /* ----------------------------------------------
+       DUYỆT CONTOUR
+    ---------------------------------------------- */
+
+    for (
+        let i = 0;
+        i < contours.size();
+        i++
+    ) {
+
+        const contour =
+            contours.get(i);
+
+
+        const area =
+            Math.abs(
+                cv.contourArea(
+                    contour
+                )
+            );
+
+
+        if (
+            area <
+            imageArea * 0.08
+        ) {
+
+            contour.delete();
+
+            continue;
+
+        }
+
+
+        const perimeter =
+            cv.arcLength(
+                contour,
+                true
+            );
+
+
+        const approx =
+            new cv.Mat();
+
+
+        cv.approxPolyDP(
+            contour,
+            approx,
+            0.015 *
+            perimeter,
+            true
+        );
+
+
+        if (
+            approx.rows !== 4
+        ) {
+
+            approx.delete();
+            contour.delete();
+
+            continue;
+
+        }
+
+
+        if (
+            !cv.isContourConvex(
+                approx
+            )
+        ) {
+
+            approx.delete();
+            contour.delete();
+
+            continue;
+
+        }
+
+
+        let points = [];
+
+
+        for (
+            let j = 0;
+            j < 4;
+            j++
+        ) {
+
+            points.push({
+
+                x:
+                    approx.intAt(
+                        j,
+                        0
+                    ),
+
+                y:
+                    approx.intAt(
+                        j,
+                        1
+                    )
+
+            });
+
+        }
+
+
+        points =
+            orderPoints(
+                points
+            );
+
+
+        /* ------------------------------------------
+           KÍCH THƯỚC
+        ------------------------------------------ */
+
+        const top =
+            distance(
+                points[0],
+                points[1]
+            );
+
+
+        const bottom =
+            distance(
+                points[3],
+                points[2]
+            );
+
+
+        const left =
+            distance(
+                points[0],
+                points[3]
+            );
+
+
+        const right =
+            distance(
+                points[1],
+                points[2]
+            );
+
+
+        const width =
+            Math.max(
+                top,
+                bottom
+            );
+
+
+        const height =
+            Math.max(
+                left,
+                right
+            );
+
+
+        if (
+            width <
+            W * 0.20 ||
+            height <
+            H * 0.20
+        ) {
+
+            approx.delete();
+            contour.delete();
+
+            continue;
+
+        }
+
+
+        const ratio =
+            Math.max(
+                width,
+                height
+            ) /
+            Math.min(
+                width,
+                height
+            );
+
+
+        if (
+            ratio > 5
+        ) {
+
+            approx.delete();
+            contour.delete();
+
+            continue;
+
+        }
+
+
+        /* ------------------------------------------
+           GÓC
+        ------------------------------------------ */
+
+        let angleScore =
+            0;
+
+
+        for (
+            let j = 0;
+            j < 4;
+            j++
+        ) {
+
+            const a =
+                points[
+                    (j + 3) % 4
+                ];
+
+
+            const b =
+                points[j];
+
+
+            const c =
+                points[
+                    (j + 1) % 4
+                ];
+
+
+            const angle =
+                getAngle(
+                    a,
+                    b,
+                    c
+                );
+
+
+            const error =
+                Math.abs(
+                    angle - 90
+                );
+
+
+            angleScore +=
+                Math.max(
+                    0,
+                    1 -
+                    error / 60
+                );
+
+        }
+
+
+        angleScore /=
+            4;
+
+
+        /* ------------------------------------------
+           HÌNH CHỮ NHẬT
+        ------------------------------------------ */
+
+        const widthError =
+            Math.abs(
+                top -
+                bottom
+            ) /
+            Math.max(
+                top,
+                bottom
+            );
+
+
+        const heightError =
+            Math.abs(
+                left -
+                right
+            ) /
+            Math.max(
+                left,
+                right
+            );
+
+
+        const rectangleScore =
+            1 -
+            Math.min(
+                1,
+                (
+                    widthError +
+                    heightError
+                ) / 2
+            );
+
+
+        /* ------------------------------------------
+           DIỆN TÍCH
+        ------------------------------------------ */
+
+        const areaRatio =
+            area /
+            imageArea;
+
+
+        const areaScore =
+            Math.min(
+                1,
+                areaRatio /
+                0.70
+            );
+
+
+        /* ------------------------------------------
+           TRUNG TÂM
+        ------------------------------------------ */
+
+        const centerX =
+            (
+                points[0].x +
+                points[1].x +
+                points[2].x +
+                points[3].x
+            ) / 4;
+
+
+        const centerY =
+            (
+                points[0].y +
+                points[1].y +
+                points[2].y +
+                points[3].y
+            ) / 4;
+
+
+        const centerDistance =
+            Math.hypot(
+                centerX - W / 2,
+                centerY - H / 2
+            ) /
+            Math.hypot(
+                W / 2,
+                H / 2
+            );
+
+
+        const centerScore =
+            1 -
+            Math.min(
+                1,
+                centerDistance
+            );
+
+
+        /* ------------------------------------------
+           SCORE
+        ------------------------------------------ */
+
+        const score =
+
+            areaScore * 55 +
+
+            angleScore * 25 +
+
+            rectangleScore * 15 +
+
+            centerScore * 5;
+
+
+        if (
+            score >
+            bestScore
+        ) {
+
+            bestScore =
+                score;
+
+            best =
+                points;
+
+        }
+
+
+        approx.delete();
+        contour.delete();
+
+    }
+
+
+    /* ----------------------------------------------
+       CLEANUP
+    ---------------------------------------------- */
+
+    gray.delete();
+    blur.delete();
+    edges.delete();
+    kernel.delete();
+    contours.delete();
+    hierarchy.delete();
+
+
+    if (
+        !best ||
+        bestScore < 43
+    ) {
+
+        return null;
+
+    }
+
+
+    return best;
+
+}
+
+
+/* =====================================================
+   ORDER 4 CORNERS
+===================================================== */
+
+function orderPoints(points) {
+
+    let tl = null;
+    let tr = null;
+    let br = null;
+    let bl = null;
+
+
+    let minSum =
+        Infinity;
+
+    let maxSum =
+        -Infinity;
+
+    let minDiff =
+        Infinity;
+
+    let maxDiff =
+        -Infinity;
+
+
+    for (
+        const p of points
+    ) {
+
+        const sum =
+            p.x +
+            p.y;
+
+
+        const diff =
+            p.x -
+            p.y;
+
+
+        if (
+            sum < minSum
+        ) {
+
+            minSum =
+                sum;
+
+            tl =
+                p;
+
+        }
+
+
+        if (
+            sum > maxSum
+        ) {
+
+            maxSum =
+                sum;
+
+            br =
+                p;
+
+        }
+
+
+        if (
+            diff > maxDiff
+        ) {
+
+            maxDiff =
+                diff;
+
+            tr =
+                p;
+
+        }
+
+
+        if (
+            diff < minDiff
+        ) {
+
+            minDiff =
+                diff;
+
+            bl =
+                p;
+
+        }
+
+    }
+
+
+    return [
+        tl,
+        tr,
+        br,
+        bl
+    ];
+
+}
+
+
+/* =====================================================
+   DISTANCE
+===================================================== */
+
+function distance(a,b) {
+
+    return Math.hypot(
+        a.x - b.x,
+        a.y - b.y
+    );
+
+}
+
+
+/* =====================================================
+   ANGLE
+===================================================== */
+
+function getAngle(
+    a,
+    b,
+    c
+) {
+
+    const abx =
+        a.x -
+        b.x;
+
+
+    const aby =
+        a.y -
+        b.y;
+
+
+    const cbx =
+        c.x -
+        b.x;
+
+
+    const cby =
+        c.y -
+        b.y;
+
+
+    const dot =
+        abx * cbx +
+        aby * cby;
+
+
+    const m1 =
+        Math.hypot(
+            abx,
+            aby
+        );
+
+
+    const m2 =
+        Math.hypot(
+            cbx,
+            cby
+        );
+
+
+    if (
+        m1 === 0 ||
+        m2 === 0
+    ) {
+
+        return 0;
+
+    }
+
+
+    let cosine =
+        dot /
+        (
+            m1 *
+            m2
+        );
+
+
+    cosine =
+        Math.max(
+            -1,
+            Math.min(
+                1,
+                cosine
+            )
+        );
+
+
+    return (
+        Math.acos(
+            cosine
+        ) *
+        180 /
+        Math.PI
+    );
+
+}
+
+
+/* =====================================================
+   PERSPECTIVE
+===================================================== */
+
+function correctPerspective(
+    src,
+    p
+) {
+
+    const top =
+        distance(
+            p[0],
+            p[1]
+        );
+
+
+    const bottom =
+        distance(
+            p[3],
+            p[2]
+        );
+
+
+    const left =
+        distance(
+            p[0],
+            p[3]
+        );
+
+
+    const right =
+        distance(
+            p[1],
+            p[2]
+        );
+
+
+    let width =
+        Math.round(
+            Math.max(
+                top,
+                bottom
+            )
+        );
+
+
+    let height =
+        Math.round(
+            Math.max(
+                left,
+                right
+            )
+        );
+
+
+    const MAX =
+        2000;
+
+
+    const scale =
+        Math.min(
+            1,
+            MAX /
+            Math.max(
+                width,
+                height
+            )
+        );
+
+
+    width =
+        Math.round(
+            width *
+            scale
+        );
+
+
+    height =
+        Math.round(
+            height *
+            scale
+        );
+
+
+    const source =
+        cv.matFromArray(
+            4,
+            1,
+            cv.CV_32FC2,
+            [
+
+                p[0].x,
+                p[0].y,
+
+                p[1].x,
+                p[1].y,
+
+                p[2].x,
+                p[2].y,
+
+                p[3].x,
+                p[3].y
+
+            ]
+        );
+
+
+    const destination =
+        cv.matFromArray(
+            4,
+            1,
+            cv.CV_32FC2,
+            [
+
+                0,
+                0,
+
+                width,
+                0,
+
+                width,
+                height,
+
+                0,
+                height
+
+            ]
+        );
+
+
+    const matrix =
+        cv.getPerspectiveTransform(
+            source,
+            destination
+        );
+
+
+    const output =
+        new cv.Mat();
+
+
+    cv.warpPerspective(
+        src,
+        output,
+        matrix,
+        new cv.Size(
+            width,
+            height
+        ),
+        cv.INTER_CUBIC,
+        cv.BORDER_CONSTANT,
+        new cv.Scalar(
+            255,
+            255,
+            255,
+            255
+        )
+    );
+
+
+    /*
+       Làm tài liệu dễ đọc hơn.
+    */
+
+    const enhanced =
+        new cv.Mat();
+
+
+    cv.convertScaleAbs(
+        output,
+        enhanced,
+        1.06,
+        3
+    );
+
+
+    source.delete();
+    destination.delete();
+    matrix.delete();
+    output.delete();
+
+
+    return enhanced;
+
+}
+
+
+/* =====================================================
+   MAT → JPEG
+===================================================== */
+
+function matToJPEG(mat) {
+
+    canvas.width =
+        mat.cols;
+
+    canvas.height =
+        mat.rows;
+
+
+    cv.imshow(
+        canvas,
+        mat
+    );
+
+
+    const data =
+        canvas.toDataURL(
+            "image/jpeg",
+            0.94
+        );
+
+
+    mat.delete();
+
+
+    return data;
+
+}
+
+
+/* =====================================================
+   HIỂN THỊ TRANG
+===================================================== */
+
+function renderPages() {
+
+    pagesBox.innerHTML =
+        "";
+
+
+    pages.forEach(
+        function(
+            src,
+            index
+        ) {
+
+            const box =
+                document.createElement(
+                    "div"
+                );
+
+
+            box.className =
+                "page";
+
+
+            const img =
+                document.createElement(
+                    "img"
+                );
+
+
+            img.src =
+                src;
+
+
+            const title =
+                document.createElement(
+                    "div"
+                );
+
+
+            title.className =
+                "page-title";
+
+
+            title.innerText =
+                `Trang ${index + 1}`;
+
+
+            box.appendChild(
+                img
+            );
+
+
+            box.appendChild(
+                title
+            );
+
+
+            pagesBox.appendChild(
+                box
+            );
+
+        }
+    );
+
+}
+
+
+/* =====================================================
+   PDF
+===================================================== */
+
+async function makePDF() {
+
+    if (
+        pages.length === 0
+    ) {
+
+        alert(
+            "Chưa có trang nào."
+        );
+
+        return;
+
+    }
+
+
+    statusBox.innerText =
+        "📑 Đang tải bộ tạo PDF...";
+
+
+    /*
+       Tải jsPDF khi cần.
+    */
+
+    if (
+        typeof window.jspdf ===
+        "undefined"
+    ) {
+
+        await loadScript(
+            "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"
+        );
+
+    }
+
+
+    const jsPDF =
+        window.jspdf.jsPDF;
+
+
+    const pdf =
+        new jsPDF({
+
+            orientation:
+                "portrait",
+
+            unit:
+                "mm",
+
+            format:
+                "a4"
+
+        });
+
+
+    for (
+        let i = 0;
+        i < pages.length;
+        i++
+    ) {
+
+        if (
+            i > 0
+        ) {
+
+            pdf.addPage();
+
+        }
+
+
+        const image =
+            await loadImageURL(
+                pages[i]
+            );
+
+
+        const pageW =
+            210;
+
+
+        const pageH =
+            297;
+
+
+        const scale =
+            Math.min(
+
+                pageW /
+                image.width,
+
+                pageH /
+                image.height
+
+            );
+
+
+        const w =
+            image.width *
+            scale;
+
+
+        const h =
+            image.height *
+            scale;
+
+
+        const x =
+            (
+                pageW -
+                w
+            ) / 2;
+
+
+        const y =
+            (
+                pageH -
+                h
+            ) / 2;
+
+
+        pdf.addImage(
+            pages[i],
+            "JPEG",
+            x,
+            y,
+            w,
+            h,
+            undefined,
+            "FAST"
+        );
+
+    }
+
+
+    pdf.save(
+        "DocScan.pdf"
+    );
+
+
+    statusBox.innerText =
+        "✅ Đã tạo DocScan.pdf";
+
+}
+
+
+/* =====================================================
+   LOAD SCRIPT
+===================================================== */
+
+function loadScript(url) {
+
+    return new Promise(
+        function(resolve,reject) {
+
+            const script =
+                document.createElement(
+                    "script"
+                );
+
+
+            script.src =
+                url;
+
+
+            script.onload =
+                resolve;
+
+
+            script.onerror =
+                reject;
+
+
+            document.head.appendChild(
+                script
+            );
+
+        }
+    );
+
+}
+
+
+/* =====================================================
+   LOAD IMAGE URL
+===================================================== */
+
+function loadImageURL(url) {
+
+    return new Promise(
+        function(resolve,reject) {
+
+            const img =
+                new Image();
+
+
+            img.onload =
+                function() {
+
+                    resolve(img);
+
+                };
+
+
+            img.onerror =
+                reject;
+
+
+            img.src =
+                url;
+
+        }
+    );
+
+}
+
+</script>
+
+</body>
+</html>
